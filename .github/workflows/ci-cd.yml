@@ -90,9 +90,6 @@ jobs:
     name: Deploy to ${{ github.ref_name == 'main' && 'production' || 'staging' }}
     needs: build
     runs-on: ubuntu-latest
-    env:
-      TARGET: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
-      PORT: ${{ github.ref_name == 'main' && '80' || '8080' }}
     steps:
       - uses: actions/checkout@v4
       - name: Copy compose files to EC2
@@ -105,36 +102,31 @@ jobs:
           target: "/home/ubuntu/short-builds"
       - name: Pull new image and restart
         uses: appleboy/ssh-action@v1.2.0
-        env:
-          IMAGE: ${{ needs.build.outputs.image }}:${{ needs.build.outputs.tag }}
-          GHCR_USER: ${{ github.actor }}
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TARGET: ${{ env.TARGET }}
-          APP_PORT: ${{ env.PORT }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: IMAGE,GHCR_USER,GHCR_TOKEN,TARGET,APP_PORT
           script: |
             set -e
             cd /home/ubuntu/short-builds
-            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-            export IMAGE APP_PORT
-            if [ "$TARGET" = "production" ]; then
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+            export IMAGE="${{ needs.build.outputs.image }}:${{ needs.build.outputs.tag }}"
+            export APP_PORT="${{ github.ref_name == 'main' && '80' || '8080' }}"
+            PROJECT="${{ github.ref_name == 'main' && 'production' || 'staging' }}"
+            if [ "$PROJECT" = "production" ]; then
               FILES="-f docker-compose.yml -f docker-compose.aws.yml"
             else
               FILES="-f docker-compose.yml"
             fi
-            docker compose -p "$TARGET" $FILES pull app
-            docker compose -p "$TARGET" $FILES up -d --no-build
+            docker compose -p "$PROJECT" $FILES pull app
+            docker compose -p "$PROJECT" $FILES up -d --no-build
             docker image prune -f
             docker logout ghcr.io
       - name: Check the new version is healthy
         run: |
           curl --fail --silent --show-error \
             --retry 12 --retry-delay 5 --retry-all-errors \
-            "http://${{ secrets.EC2_HOST }}:${PORT}/health"
+            "http://${{ secrets.EC2_HOST }}:${{ github.ref_name == 'main' && '80' || '8080' }}/health"
 
   load-test:
     name: k6 load test (20 URLs per second)
