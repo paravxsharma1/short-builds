@@ -1,15 +1,14 @@
 {
   "name": "short-builds",
   "version": "1.0.0",
-  "description": "SWE40006 Group 6 - URL shortener with a CI/CD pipeline on AWS",
+  "description": "SWE40006 Group 6 - Stateless website short links with a CI/CD pipeline on AWS",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
     "test": "jest --coverage --runInBand"
   },
   "dependencies": {
-    "express": "^4.21.2",
-    "pg": "^8.13.1"
+    "express": "^4.21.2"
   },
   "devDependencies": {
     "jest": "^29.7.0",
@@ -19,7 +18,10 @@
     "testEnvironment": "node",
     "collectCoverageFrom": ["src/**/*.js", "!src/server.js"],
     "coverageThreshold": {
-      "global": { "lines": 80, "statements": 80 }
+      "global": {
+        "lines": 80,
+        "statements": 80
+      }
     }
   }
 }

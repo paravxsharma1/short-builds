@@ -1,6 +1,3 @@
-// Load test: 20 new short URLs per second for 30 seconds against staging.
-// The CI job fails if more than 1% of requests fail or if 95% of them
-// take longer than 1 second.
 import http from 'k6/http';
 import { check } from 'k6';
 
@@ -20,14 +17,26 @@ export const options = {
   thresholds: {
     http_req_failed: ['rate<0.01'],
     http_req_duration: ['p(95)<1000'],
+    checks: ['rate>0.99'],
   },
 };
 
 export default function () {
   const res = http.post(
     `${BASE_URL}/api/shorten`,
-    JSON.stringify({ url: `https://example.com/load/${__VU}/${__ITER}` }),
-    { headers: { 'Content-Type': 'application/json' } }
+    JSON.stringify({
+      url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+    }),
+    {
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    }
   );
-  check(res, { 'status is 201': (r) => r.status === 201 });
+
+  check(res, {
+    'returns the YouTube short link': (r) =>
+      r.status === 200 &&
+      r.json('shortUrl') === 'https://youtu.be/dQw4w9WgXcQ',
+  });
 }

@@ -82,7 +82,7 @@
 <body>
   <main>
     <h1>Short<span>.</span>Builds</h1>
-    <p class="tagline">Paste a long link, get a short one. Links last 30 days.</p>
+    <p class="tagline">Paste a link, get its website's short version.</p>
 
     <div class="card">
       <form id="form">
@@ -92,7 +92,11 @@
           <button type="submit" id="btn">Shorten</button>
         </div>
       </form>
-      <div class="message" id="msg"></div>
+      <p style="font-size: 0.85rem; color: var(--muted); line-height: 1.5;">
+        Supports YouTube videos, Reddit posts, Flickr photos and Dailymotion videos.
+        This app does not save your links.
+      </p>
+      <div class="message" id="msg" role="status" aria-live="polite"></div>
       <div class="result" id="result">
         <a id="short" href="#" target="_blank" rel="noopener"></a>
         <div class="meta" id="meta"></div>
@@ -139,7 +143,11 @@
 
         shortLink.textContent = data.shortUrl;
         shortLink.href = data.shortUrl;
-        meta.textContent = 'Expires ' + new Date(data.expiresAt).toLocaleDateString();
+        meta.textContent = data.provider + (
+          data.method === 'already_short'
+            ? ' · Already a short link'
+            : ' · Ready to share'
+        );
         result.classList.add('show');
         copyBtn.textContent = 'Copy link';
       } catch (err) {

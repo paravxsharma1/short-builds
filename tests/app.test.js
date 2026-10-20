@@ -1,125 +1,184 @@
 const request = require('supertest');
-const { app, generateCode, isValidUrl } = require('../src/app');
-const db = require('../src/db');
+const { createApp } = require('../src/app');
+const { shortenUrl } = require('../src/shorten');
 
-beforeAll(async () => {
-  await db.init();
-  await db.pool.query('DELETE FROM urls');
+const LONG = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ';
+const SHORT = 'https://youtu.be/dQw4w9WgXcQ';
+
+let app;
+let networkSpy;
+
+beforeEach(() => {
+  networkSpy = jest.spyOn(globalThis, 'fetch')
+    .mockImplementation(() => {
+      throw new Error('Conversion must not call an external service');
+    });
+
+  app = createApp();
 });
 
-afterAll(async () => {
-  await db.pool.end();
+afterEach(() => {
+  expect(networkSpy).not.toHaveBeenCalled();
+  jest.restoreAllMocks();
 });
 
-describe('URL validation', () => {
-  test('accepts http and https URLs', () => {
-    expect(isValidUrl('https://www.youtube.com/watch?v=rUHYbwZDVVI')).toBe(true);
-    expect(isValidUrl('http://example.com')).toBe(true);
+function post(url) {
+  return request(app).post('/api/shorten').send({ url });
+}
+
+describe('YouTube conversions', () => {
+  test.each([
+    LONG,
+    `${SHORT}?si=oI-Jl-cLf1H8Vz4j`,
+    'https://m.youtube.com/watch?v=dQw4w9WgXcQ',
+    'https://music.youtube.com/watch?v=dQw4w9WgXcQ',
+    'https://youtube.com/shorts/dQw4w9WgXcQ',
+    'https://www.youtube.com/embed/dQw4w9WgXcQ',
+    'https://www.youtube.com/live/dQw4w9WgXcQ',
+    'http://youtube.com/watch?v=dQw4w9WgXcQ',
+    `  ${LONG}  `,
+  ])('converts %s', async (url) => {
+    const res = await post(url);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      originalUrl: url.trim(),
+      shortUrl: SHORT,
+      provider: 'YouTube',
+      method: 'rewrite',
+    });
+    expect(res.headers['cache-control']).toBe('no-store');
   });
 
-  test('rejects anything that is not a web URL', () => {
-    expect(isValidUrl('not a url')).toBe(false);
-    expect(isValidUrl('ftp://example.com')).toBe(false);
-    expect(isValidUrl('javascript:alert(1)')).toBe(false);
-    expect(isValidUrl('')).toBe(false);
-    expect(isValidUrl(undefined)).toBe(false);
-    expect(isValidUrl('https://a.com/' + 'x'.repeat(3000))).toBe(false);
+  test('keeps clean short links unchanged across app instances', async () => {
+    expect((await post(SHORT)).body.method).toBe('already_short');
+
+    const restarted = createApp();
+    const res = await request(restarted)
+      .post('/api/shorten')
+      .send({ url: SHORT });
+
+    expect(res.body.shortUrl).toBe(SHORT);
+    expect(res.body).not.toHaveProperty('code');
+    expect(res.body).not.toHaveProperty('expiresAt');
+  });
+
+  test('preserves useful context while removing tracking', async () => {
+    const res = await post(
+      `${LONG}&t=1m30s&list=PL123&index=2&context=keep` +
+      '&si=abc&utm_source=x&feature=share&fbclid=x&gclid=x#t=90'
+    );
+
+    const output = new URL(res.body.shortUrl);
+
+    expect(output.origin + output.pathname).toBe(SHORT);
+    expect(Object.fromEntries(output.searchParams)).toEqual({
+      t: '1m30s',
+      list: 'PL123',
+      index: '2',
+      context: 'keep',
+    });
+    expect(output.hash).toBe('#t=90');
+  });
+
+  test('converts embed start time to a share timestamp', async () => {
+    const res = await post(
+      'https://www.youtube.com/embed/dQw4w9WgXcQ?start=90'
+    );
+
+    expect(res.body.shortUrl).toBe(`${SHORT}?t=90`);
+  });
+
+  test.each([
+    'https://youtube.com/watch?v=short',
+    'https://youtube.com/watch?v=dQw4w9WgXcQ&v=AAAAAAAAAAA',
+    'https://youtube.com/playlist?list=PL123',
+    'https://youtube.com/@channel',
+    'https://youtu.be/dQw4w9WgXcQ.',
+    'https://youtu.be/dQw4w9WgXcQ/extra',
+  ])('rejects unsupported video URL %s', async (url) => {
+    expect((await post(url)).status).toBe(422);
   });
 });
 
-describe('Code generation', () => {
-  test('creates a 7 character alphanumeric code', () => {
-    const code = generateCode();
-    expect(code).toMatch(/^[a-zA-Z0-9]{7}$/);
+describe('Input validation', () => {
+  test.each([
+    undefined,
+    null,
+    42,
+    {},
+    [],
+    '',
+    'hello',
+    '/relative',
+    'ftp://youtube.com/watch?v=dQw4w9WgXcQ',
+    'javascript:alert(1)',
+    'https://name:password@youtube.com/watch?v=dQw4w9WgXcQ',
+    'https://youtube.com:8443/watch?v=dQw4w9WgXcQ',
+    'https://example.com/' + 'x'.repeat(2048),
+  ])('rejects invalid input %p', async (url) => {
+    const res = await post(url);
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('invalid_url');
   });
 
-  test('codes are random', () => {
-    const codes = new Set(Array.from({ length: 1000 }, () => generateCode()));
-    expect(codes.size).toBe(1000);
+  test.each([
+    'https://example.com',
+    'https://youtube.com.evil.test/watch?v=dQw4w9WgXcQ',
+    'https://en.wikipedia.org/wiki/Example',
+    'https://w.wiki/AbC',
+    'https://x.com/user/status/123',
+    'https://twitter.com/user/status/123',
+    'https://t.co/AbC',
+    'http://127.0.0.1/',
+    'http://169.254.169.254/latest/meta-data/',
+  ])('rejects unsupported host %s', async (url) => {
+    const res = await post(url);
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('unsupported_domain');
   });
 });
 
-describe('POST /api/shorten', () => {
-  test('returns a short URL for a valid long URL', async () => {
+describe('App endpoints', () => {
+  test('health works without a database', async () => {
+    const res = await request(app).get('/health');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ status: 'ok' });
+  });
+
+  test('serves the updated page without expiry wording', async () => {
+    const res = await request(app).get('/');
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('This app does not save your links.');
+    expect(res.text).not.toMatch(/expiresAt|30 days/);
+  });
+
+  test('does not host local redirect codes', async () => {
+    const res = await request(app).get('/abc1234');
+
+    expect(res.status).toBe(404);
+    expect(res.headers.location).toBeUndefined();
+  });
+
+  test('rejects malformed JSON', async () => {
     const res = await request(app)
       .post('/api/shorten')
-      .send({ url: 'https://www.youtube.com/watch?v=rUHYbwZDVVI' });
+      .set('Content-Type', 'application/json')
+      .send('{');
 
-    expect(res.status).toBe(201);
-    expect(res.body.code).toMatch(/^[a-zA-Z0-9]{7}$/);
-    expect(res.body.shortUrl).toContain(res.body.code);
-    expect(res.body.originalUrl).toBe('https://www.youtube.com/watch?v=rUHYbwZDVVI');
-  });
-
-  test('sets the expiry 30 days ahead', async () => {
-    const res = await request(app).post('/api/shorten').send({ url: 'https://example.com' });
-    const days = (new Date(res.body.expiresAt) - Date.now()) / (1000 * 60 * 60 * 24);
-    expect(days).toBeGreaterThan(29.9);
-    expect(days).toBeLessThan(30.1);
-  });
-
-  test('rejects an invalid URL with 400', async () => {
-    const res = await request(app).post('/api/shorten').send({ url: 'hello world' });
     expect(res.status).toBe(400);
-    expect(res.body.error).toBeDefined();
+    expect(res.body.error).toBe('Invalid JSON request.');
   });
 
-  test('rejects a missing URL with 400', async () => {
-    const res = await request(app).post('/api/shorten').send({});
-    expect(res.status).toBe(400);
-  });
-
-  test('responds quickly (well under the 10 second target)', async () => {
-    const start = Date.now();
-    await request(app).post('/api/shorten').send({ url: 'https://example.com/speed' });
-    expect(Date.now() - start).toBeLessThan(1000);
+  test('rejects oversized bodies', async () => {
+    expect((await post('x'.repeat(5000))).status).toBe(413);
   });
 });
 
-describe('GET /:code', () => {
-  test('redirects to the original URL', async () => {
-    const created = await request(app).post('/api/shorten').send({ url: 'https://www.linkedin.com/in/someone' });
-    const res = await request(app).get(`/${created.body.code}`);
-    expect(res.status).toBe(302);
-    expect(res.headers.location).toBe('https://www.linkedin.com/in/someone');
-  });
-
-  test('returns 404 for a code that does not exist', async () => {
-    const res = await request(app).get('/zzzzzzz');
-    expect(res.status).toBe(404);
-  });
-
-  test('returns 404 for a badly formed code', async () => {
-    const res = await request(app).get('/bad-code!');
-    expect(res.status).toBe(404);
-  });
-
-  test('returns 404 once a link has expired', async () => {
-    await db.pool.query(
-      "INSERT INTO urls (code, original_url, expires_at) VALUES ('expired1', 'https://old.com', NOW() - INTERVAL '1 day')"
-    );
-    const res = await request(app).get('/expired1');
-    expect(res.status).toBe(404);
-  });
-});
-
-describe('Expiry cleanup job', () => {
-  test('deletes links past 30 days and keeps current ones', async () => {
-    await db.pool.query(
-      "INSERT INTO urls (code, original_url, expires_at) VALUES ('expired2', 'https://old.com', NOW() - INTERVAL '1 day')"
-    );
-    const removed = await db.deleteExpired();
-    expect(removed).toBeGreaterThanOrEqual(1);
-
-    const left = await db.pool.query('SELECT COUNT(*) FROM urls WHERE expires_at <= NOW()');
-    expect(Number(left.rows[0].count)).toBe(0);
-  });
-});
-
-describe('GET /health', () => {
-  test('reports app and database as healthy', async () => {
-    const res = await request(app).get('/health');
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ status: 'ok', database: 'ok' });
-  });
+test('conversion also works independently of Express', () => {
+  expect(shortenUrl(LONG).shortUrl).toBe(SHORT);
 });
