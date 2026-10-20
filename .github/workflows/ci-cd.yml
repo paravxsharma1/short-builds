@@ -109,25 +109,25 @@ jobs:
           IMAGE: ${{ needs.build.outputs.image }}:${{ needs.build.outputs.tag }}
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TARGET: ${{ env.TARGET }}
+          DEPLOY_ENV: ${{ env.TARGET }}
           APP_PORT: ${{ env.PORT }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: IMAGE,GHCR_USER,GHCR_TOKEN,TARGET,APP_PORT
+          envs: IMAGE,GHCR_USER,GHCR_TOKEN,DEPLOY_ENV,APP_PORT
           script: |
             set -e
             cd /home/ubuntu/short-builds
             echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
             export IMAGE APP_PORT
-            if [ "$TARGET" = "production" ]; then
+            if [ "$DEPLOY_ENV" = "production" ]; then
               FILES="-f docker-compose.yml -f docker-compose.aws.yml"
             else
               FILES="-f docker-compose.yml"
             fi
-            docker compose -p "$TARGET" $FILES pull app
-            docker compose -p "$TARGET" $FILES up -d --no-build
+            docker compose -p "$DEPLOY_ENV" $FILES pull app
+            docker compose -p "$DEPLOY_ENV" $FILES up -d --no-build
             docker image prune -f
             docker logout ghcr.io
       - name: Check the new version is healthy
