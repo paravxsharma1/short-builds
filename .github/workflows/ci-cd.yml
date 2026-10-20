@@ -1,0 +1,149 @@
+# Short Builds CI/CD pipeline
+#
+# push to staging -> test -> build image -> deploy to STAGING (port 8080) -> k6 load test
+# pull request to main -> test (must pass before merging)
+# push/merge to main -> test -> build image -> deploy to PRODUCTION (port 80)
+
+name: CI/CD
+
+on:
+  push:
+    branches: [main, staging]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: deploy-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Unit and API tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: shortener
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/shortener
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Save coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+
+  build:
+    name: Build and push Docker image
+    needs: test
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.vars.outputs.image }}
+      tag: ${{ steps.vars.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Work out image name and tag
+        id: vars
+        run: |
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          if [ "${GITHUB_REF_NAME}" = "main" ]; then
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=staging" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          tags: |
+            ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.tag }}
+            ${{ steps.vars.outputs.image }}:${{ github.sha }}
+
+  deploy:
+    name: Deploy to ${{ github.ref_name == 'main' && 'production' || 'staging' }}
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      TARGET: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
+      PORT: ${{ github.ref_name == 'main' && '80' || '8080' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Copy compose files to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "docker-compose.yml,docker-compose.aws.yml"
+          target: "/home/ubuntu/short-builds"
+      - name: Pull new image and restart
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          IMAGE: ${{ needs.build.outputs.image }}:${{ needs.build.outputs.tag }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET: ${{ env.TARGET }}
+          APP_PORT: ${{ env.PORT }}
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: IMAGE,GHCR_USER,GHCR_TOKEN,TARGET,APP_PORT
+          script: |
+            set -e
+            cd /home/ubuntu/short-builds
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+            export IMAGE APP_PORT
+            if [ "$TARGET" = "production" ]; then
+              FILES="-f docker-compose.yml -f docker-compose.aws.yml"
+            else
+              FILES="-f docker-compose.yml"
+            fi
+            docker compose -p "$TARGET" $FILES pull app
+            docker compose -p "$TARGET" $FILES up -d --no-build
+            docker image prune -f
+            docker logout ghcr.io
+      - name: Check the new version is healthy
+        run: |
+          curl --fail --silent --show-error \
+            --retry 12 --retry-delay 5 --retry-all-errors \
+            "http://${{ secrets.EC2_HOST }}:${PORT}/health"
+
+  load-test:
+    name: k6 load test (20 URLs per second)
+    needs: deploy
+    if: github.ref_name == 'staging'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run k6 against staging
+        run: |
+          docker run --rm -i grafana/k6 run \
+            -e BASE_URL="http://${{ secrets.EC2_HOST }}:8080" - < k6/load-test.js

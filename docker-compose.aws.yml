@@ -1,0 +1,10 @@
+# Production only: sends the app's logs to Amazon CloudWatch Logs.
+# Needs an IAM role on the EC2 instance that allows CloudWatch Logs.
+# The AWS region is read automatically from the EC2 instance.
+services:
+  app:
+    logging:
+      driver: awslogs
+      options:
+        awslogs-group: short-builds-production
+        awslogs-create-group: "true"

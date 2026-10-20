@@ -1,0 +1,7 @@
+node_modules
+coverage
+tests
+k6
+.git
+.github
+*.md

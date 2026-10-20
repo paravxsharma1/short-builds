@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Short Builds</title>
+  <style>
+    :root {
+      --bg: #f4f1ea;
+      --card: #ffffff;
+      --ink: #1d1d1b;
+      --muted: #6b6860;
+      --accent: #d9480f;
+      --accent-dark: #a8360b;
+      --ok: #2b8a3e;
+      --err: #c92a2a;
+      --line: #e3ded3;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 16px;
+    }
+    main { width: 100%; max-width: 560px; }
+    h1 { font-size: 2.4rem; margin: 0 0 4px; letter-spacing: -0.03em; }
+    h1 span { color: var(--accent); }
+    .tagline { color: var(--muted); margin: 0 0 28px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 24px;
+      box-shadow: 0 6px 24px rgba(0,0,0,0.05);
+    }
+    label { font-weight: 600; display: block; margin-bottom: 8px; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; }
+    input[type=text] {
+      flex: 1 1 260px;
+      padding: 12px 14px;
+      font-size: 1rem;
+      border: 1.5px solid var(--line);
+      border-radius: 10px;
+      outline: none;
+    }
+    input[type=text]:focus { border-color: var(--accent); }
+    button {
+      padding: 12px 20px;
+      font-size: 1rem;
+      font-weight: 600;
+      border: none;
+      border-radius: 10px;
+      background: var(--accent);
+      color: white;
+      cursor: pointer;
+    }
+    button:hover { background: var(--accent-dark); }
+    button:disabled { opacity: 0.6; cursor: wait; }
+    .message { margin-top: 14px; min-height: 1.4em; font-size: 0.95rem; }
+    .message.error { color: var(--err); }
+    .result {
+      display: none;
+      margin-top: 18px;
+      padding: 16px;
+      border-radius: 10px;
+      background: #fff4e6;
+      border: 1px dashed var(--accent);
+    }
+    .result.show { display: block; }
+    .result a { color: var(--accent-dark); font-weight: 700; font-size: 1.15rem; word-break: break-all; }
+    .result .meta { color: var(--muted); font-size: 0.85rem; margin-top: 8px; }
+    .copy { margin-top: 12px; background: var(--ink); padding: 8px 14px; font-size: 0.9rem; }
+    footer { color: var(--muted); font-size: 0.8rem; margin-top: 20px; text-align: center; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Short<span>.</span>Builds</h1>
+    <p class="tagline">Paste a long link, get a short one. Links last 30 days.</p>
+
+    <div class="card">
+      <form id="form">
+        <label for="url">Long URL</label>
+        <div class="row">
+          <input type="text" id="url" placeholder="https://www.youtube.com/watch?v=rUHYbwZDVVI" autocomplete="off">
+          <button type="submit" id="btn">Shorten</button>
+        </div>
+      </form>
+      <div class="message" id="msg"></div>
+      <div class="result" id="result">
+        <a id="short" href="#" target="_blank" rel="noopener"></a>
+        <div class="meta" id="meta"></div>
+        <button class="copy" id="copy" type="button">Copy link</button>
+      </div>
+    </div>
+
+    <footer>SWE40006 · Group 6 · Short Builds</footer>
+  </main>
+
+  <script>
+    const form = document.getElementById('form');
+    const input = document.getElementById('url');
+    const btn = document.getElementById('btn');
+    const msg = document.getElementById('msg');
+    const result = document.getElementById('result');
+    const shortLink = document.getElementById('short');
+    const meta = document.getElementById('meta');
+    const copyBtn = document.getElementById('copy');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      msg.textContent = '';
+      msg.className = 'message';
+      result.classList.remove('show');
+
+      const url = input.value.trim();
+      if (!url) {
+        msg.textContent = 'Paste a link first.';
+        msg.className = 'message error';
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = 'Shortening...';
+      try {
+        const res = await fetch('/api/shorten', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Something went wrong');
+
+        shortLink.textContent = data.shortUrl;
+        shortLink.href = data.shortUrl;
+        meta.textContent = 'Expires ' + new Date(data.expiresAt).toLocaleDateString();
+        result.classList.add('show');
+        copyBtn.textContent = 'Copy link';
+      } catch (err) {
+        msg.textContent = err.message;
+        msg.className = 'message error';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Shorten';
+      }
+    });
+
+    copyBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(shortLink.textContent);
+        copyBtn.textContent = 'Copied!';
+      } catch {
+        copyBtn.textContent = 'Select and copy manually';
+      }
+    });
+  </script>
+</body>
+</html>
