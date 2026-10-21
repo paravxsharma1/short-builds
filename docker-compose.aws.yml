@@ -1,13 +1,7 @@
-
+# Production only: sends the app's logs to Amazon CloudWatch Logs.
+# Needs an IAM role on the EC2 instance that allows CloudWatch Logs.
 services:
   app:
-    restart: unless-stopped
-    environment:
-      NODE_ENV: production
-      PORT: "3000"
-      DATABASE_URL: ${DATABASE_URL}
-    ports:
-      - "3000:3000"
     logging:
       driver: awslogs
       options:
