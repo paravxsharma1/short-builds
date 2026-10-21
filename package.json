@@ -8,7 +8,7 @@
     "test": "jest --coverage --runInBand"
   },
   "dependencies": {
-    "express": "^4.21.2",
+    "express": "^4.22.3",
     "pg": "^8.13.1"
   },
   "devDependencies": {
@@ -17,9 +17,15 @@
   },
   "jest": {
     "testEnvironment": "node",
-    "collectCoverageFrom": ["src/**/*.js", "!src/server.js"],
+    "collectCoverageFrom": [
+      "src/**/*.js",
+      "!src/server.js"
+    ],
     "coverageThreshold": {
-      "global": { "lines": 80, "statements": 80 }
+      "global": {
+        "lines": 80,
+        "statements": 80
+      }
     }
   }
 }
